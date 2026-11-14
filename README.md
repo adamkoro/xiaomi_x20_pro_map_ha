@@ -6,21 +6,40 @@
 
 A HACS custom integration that adds a **live map camera** for the Xiaomi Robot Vacuum
 X20 Pro (`xiaomi.vacuum.d102gl`). It runs **on top of** the official Xiaomi Home
-integration (`xiaomi_home`). It never logs in itself: it borrows `xiaomi_home`'s
-cloud client (OAuth token, region, token refresh) and its device list.
+integration (`xiaomi_home`): the device, region and map object name come from
+`xiaomi_home`. Xiaomi Home's OAuth API can't hand out the map download link (see
+[Live test results](#live-test-results)), so that **one** call uses a second, legacy
+Mi-account login that you enter in the integration's options.
 
-Status: **scaffold, not yet tested on the real robot.** See [Open questions](#open-questions).
+Status: **in testing, no map rendered on the real robot yet.** See [Open questions](#open-questions).
 
-## Install (later)
+## Install
 
-HACS → Custom repositories → this repo (Integration). Restart, then
-*Settings → Devices & services → Add → Xiaomi X20 Pro Map*, and pick the vacuum.
-The `camera.<vacuum>_map` entity shows up on the existing Xiaomi Home device.
+1. HACS → Custom repositories → this repo (Integration), or copy
+   `custom_components/xiaomi_x20_map/` into `/config/custom_components/`. Restart HA.
+2. *Settings → Devices & services → Add integration → Xiaomi X20 Pro Map*, pick the vacuum.
+   The camera (`camera.<vacuum>_map`) shows up on the existing Xiaomi Home device.
+3. On that integration's card, choose **Configure** and enter your Mi account
+   (email, phone or numeric ID) and password. Saving logs in once to check it, and
+   the integration reloads.
 
-Self-check for the decrypt/render code (no HA needed):
+### Mi-account login
+
+- Stored in this integration's config entry (`.storage/core.config_entries`), like
+  any HA integration's credentials. Never logged, never put in attributes.
+- If Xiaomi wants **2FA or a captcha**, the form shows Xiaomi's verification link.
+  Open it in a browser on the **same network / public IP as HA**, finish the check,
+  then press Submit again. If the camera hits this later (session expired), it stops
+  trying, shows `error` and `verification_url` on the camera; do the check, then
+  reload the integration.
+- A wrong password also stops retries (to avoid an account lock) until you fix it
+  under Configure.
+
+### Self-checks (no HA needed)
 
 ```sh
 uv run --no-project --with pillow --with cryptography python tests/test_map.py
+uv run --no-project --with requests python tests/test_micloud.py
 ```
 
 ## Research findings (2026-11-14)
@@ -141,6 +160,27 @@ Every attempt (route, body, name, HTTP status, first 200 chars of the reply) is
 listed in the camera's `attempts` attribute; the working one is shown in
 `file_url_endpoint`. After a full failure it waits 10 minutes before probing again.
 
+### 2026-11-14, v0.1.1: no file-URL route on the OAuth host
+
+All five routes above returned **404** on `de.ha.api.io.mi.com`. The HA OAuth gateway
+simply doesn't expose file URLs. Decision (user approved): an optional legacy
+Mi-account login only for this call.
+
+### v0.2.0: legacy Mi-account API for the file URL
+
+- `micloud.py`: password login via `account.xiaomi.com/pass/serviceLogin` +
+  `serviceLoginAuth2` (sid `xiaomiio`) → `ssecurity`, `serviceToken`; signed RC4
+  requests to `https://<region>.api.io.mi.com/app<path>` with `data={"obj_name": …}`.
+  Ported from Cloud Map Extractor / xiaomi-vac; RC4 in plain Python, no new requirements.
+- Region comes from xiaomi_home (`de`). Routes tried in order:
+  `/v2/home/get_interim_file_url` (xiaomi-vac's choice for d102gl's family),
+  `/v2/home/get_interim_file_url_pro`, `/home/getmapfileurl`.
+- Camera attributes: `attempts` (route, name, HTTP status, Xiaomi's code/message;
+  never a returned URL), `file_url_endpoint` (region + route that worked),
+  `error`, `verification_url`, `map_obj_name`, `obj_name_used`.
+- The session lives in memory; HA restart = one fresh login. 401 → log in again on
+  the next cycle.
+
 ## Plan
 
 1. ✅ Scaffold: config flow picks a xiaomi_home vacuum; a camera polls every 60 s:
@@ -148,10 +188,11 @@ listed in the camera's `attempts` attribute; the working one is shown in
    download → decrypt → render rooms/walls (PNG). The `error`, `map_obj_name` and
    `obj_name_used` attributes show what happened.
 2. Install on HA, look at the camera's attributes / log, and answer the open questions.
-3. If the OAuth path is refused: fallbacks in order (a) the `_pro` endpoint,
-   (b) a different body shape, (c) as a last resort, an optional legacy Mi-account
-   login only for the file URL (this breaks the "no second login" goal, so ask first).
-4. Once the map renders: robot position (p10.4), dock (`pile_x/y`), path (p10.2 object),
+3. ✅ OAuth path refused (404 on every route) → optional legacy Mi-account login
+   only for the file URL (v0.2.0).
+4. If a fresh login at every HA restart triggers 2FA too often: keep the session
+   (`passToken`) in the entry and refresh with it instead of the password.
+5. Once the map renders: robot position (p10.4), dock (`pile_x/y`), path (p10.2 object),
    room names (p2.16), faster polling while cleaning.
 
 ## Open questions
@@ -159,9 +200,10 @@ listed in the camera's `attempts` attribute; the working one is shown in
 1. ~~Will `ha.api.io.mi.com` accept `/app/v2/home/get_interim_file_url` with
    xiaomi_home's OAuth token?~~ **No: HTTP 404** (2026-11-14). Does any other file-URL
    route work there (v0.1.1 probes them)? If none does, the only known path is the
-   legacy Mi-account API, which means a second login.
-2. Body shape on the OAuth API: `{"obj_name": …}` or the legacy
-   `{"data": "{\"obj_name\":…}"}`? (Only matters once a route answers.)
+   legacy Mi-account API, which means a second login.~~ None did (all 404), so v0.2.0
+   uses the legacy API.
+2. Which legacy route answers for d102gl: `get_interim_file_url`, `_pro` or
+   `getmapfileurl`? (v0.2.0 tries all three; `file_url_endpoint` will tell.)
 3. ~~What does p10.1 hold?~~ `<uid>/<did>/0`, the FDS object name (2026-11-14).
 4. Is the d102gl blob really the version-2 JSON format? (xiaomi-vac assumes so from the
    spec family; it is confirmed only on d109gl and ov42gl.)

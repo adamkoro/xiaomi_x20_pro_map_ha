@@ -11,5 +11,19 @@
       "no_vacuums": "Xiaomi Home has no vacuum devices.",
       "already_configured": "This vacuum already has a map."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mi account for the map",
+        "description": "Xiaomi Home's own login can't download the map, so this integration signs in to your Mi account (the legacy API) only to get the map file link. Everything else still goes through Xiaomi Home. The password is stored in this config entry.\n\n{info}",
+        "data": { "username": "Mi account (email, phone or ID)", "password": "Password" }
+      }
+    },
+    "error": {
+      "verify": "Xiaomi wants you to verify this sign-in. Open the link above in a browser on the same network as Home Assistant, finish the check, then submit again.",
+      "invalid_auth": "Xiaomi refused the login, see the message above.",
+      "cannot_connect": "Couldn't reach Xiaomi. Check Home Assistant's internet connection and try again."
+    }
   }
 }

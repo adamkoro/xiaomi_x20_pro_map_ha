@@ -1,5 +1,5 @@
-"""Map camera. Borrows xiaomi_home's MIoTHttpClient (OAuth token, region, refresh)."""
-import json
+"""Map camera. xiaomi_home gives the device and map object name; a legacy Mi-account
+session (options flow) mints the file URL, which xiaomi_home's OAuth API can't."""
 import logging
 import time
 
@@ -9,25 +9,19 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from . import DOMAIN
 from .map import decrypt, render
+from .micloud import CloudUnreachable, LoginError, MiCloud, VerificationRequired
 
 _LOGGER = logging.getLogger(__name__)
 REFRESH_S = 60  # ponytail: fixed poll; faster while cleaning once the fetch is proven
 MAP_SIID, MAP_OBJ_PIID = 10, 1  # d102gl spec: vacuum-map / map-obj-name
 FAIL_BACKOFF_S = 600  # all endpoints failed: don't re-probe every minute
-# File-URL routes seen in xiaomi-vac, Cloud Map Extractor and dreame-vacuum, under the /app
-# prefix every xiaomi_home path uses. Tried in order until one returns a url.
+# Legacy Mi-account API routes (https://<region>.api.io.mi.com/app<path>), tried in order.
+# The same routes on xiaomi_home's OAuth host (de.ha.api.io.mi.com) all answer 404 (v0.1.1).
 URL_PATHS = [
-    "/app/v2/home/get_interim_file_url",
-    "/app/v2/home/get_interim_file_url_pro",
-    "/app/home/getmapfileurl",
-    "/app/home/getfileurl",
-    "/app/home/getfileurl_v3",
+    "/v2/home/get_interim_file_url",      # xiaomi-vac: JSON-map family (d102gl)
+    "/v2/home/get_interim_file_url_pro",  # xiaomi-vac: ijai
+    "/home/getmapfileurl",                # Cloud Map Extractor: older Xiaomi/Roborock
 ]
-BODY_SHAPES = {
-    "json": lambda n: {"obj_name": n},
-    "data": lambda n: {"data": json.dumps({"obj_name": n})},  # legacy API's form-style wrapper
-}
-
 
 async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities([MapCamera(hass, entry)])
@@ -44,7 +38,10 @@ class MapCamera(Camera):
         self._attr_unique_id = f"{entry.data['did']}_map"
         self._img: bytes | None = None
         self._last = 0.0
-        self._found: tuple[str, str] | None = None  # (path, body shape) that worked
+        self._found: str | None = None  # URL path that worked
+        opts = entry.options
+        self._mi = MiCloud(opts["username"], opts["password"]) if opts.get("password") else None
+        self._blocked: str | None = None  # login needs a human: stop retrying until reload
         self._attr_extra_state_attributes = {}
 
     def _client(self):
@@ -57,37 +54,48 @@ class MapCamera(Camera):
         server = self._client().cloud_server
         return DeviceInfo(identifiers={("xiaomi_home", f"{server}_{self._d['did']}")})
 
-    async def _post(self, http, path: str, body: dict) -> tuple[int, str]:
-        # Same host + headers (Bearer token, app id) xiaomi_home itself sends; private attrs.
-        headers = http._MIoTHttpClient__api_request_headers
-        async with async_get_clientsession(self.hass).post(
-                f"{http._base_url}{path}", json=body, headers=headers, timeout=15) as r:
-            return r.status, (await r.text())[:200]
+    async def _login(self) -> None:
+        if self._mi is None:
+            raise RuntimeError("No Mi account set: Settings > Devices & services > "
+                               "Xiaomi X20 Pro Map > Configure, enter it there")
+        if self._blocked:
+            raise RuntimeError(self._blocked)
+        if self._mi.logged_in:
+            return
+        try:
+            await self.hass.async_add_executor_job(self._mi.login)
+        except CloudUnreachable:
+            raise  # network: retry after the backoff
+        except VerificationRequired as ex:
+            self._attr_extra_state_attributes["verification_url"] = ex.url
+            self._blocked = f"{ex} Then reload the Xiaomi X20 Pro Map integration."
+            raise RuntimeError(self._blocked) from None
+        except LoginError as ex:  # wrong password etc.: retrying only risks an account lock
+            self._blocked = f"{ex}. Fix it under Configure, which reloads the integration."
+            raise RuntimeError(self._blocked) from None
+        self._attr_extra_state_attributes.pop("verification_url", None)
 
-    async def _file_url(self, http, names) -> tuple[str, str, str]:
-        """First (url, path, name) that works; every attempt is kept in the 'attempts' attribute."""
-        if self._found:
-            path, shape = self._found
-            combos = [(path, shape)]
-        else:
-            combos = [(p, s) for p in URL_PATHS for s in BODY_SHAPES]
-        attempts, dead = [], set()
-        for path, shape in combos:
-            if path in dead:
-                continue
+    async def _file_url(self, names) -> tuple[str, str]:
+        """First (url, name) that works; every attempt is kept in the 'attempts' attribute."""
+        await self._login()
+        server = self._client().cloud_server
+        attempts = []
+        for path in [self._found] if self._found else URL_PATHS:
             for name in names:
-                status, text = await self._post(http, path, BODY_SHAPES[shape](name))
-                attempts.append(f"{path} [{shape}] {name}: {status} {text}")
-                if status == 404:  # no such route: the body/name can't fix it
-                    dead.add(path)
+                status, res = await self.hass.async_add_executor_job(
+                    self._mi.call, server, path, {"obj_name": name})
+                url = (res.get("result") or {}).get("url") if isinstance(res, dict) else None
+                if url:
+                    self._found = path
+                    self._attr_extra_state_attributes["file_url_endpoint"] = f"{server} {path}"
+                    return url, name
+                if isinstance(res, dict):  # never echo a result: it may hold a signed URL
+                    res = f"code {res.get('code')} {res.get('message', '')}"
+                attempts.append(f"{path} {name}: {status} {res}")
+                if status == 401:  # session expired: log in again next cycle
+                    self._mi.logout()
+                if status in (401, 404):
                     break
-                try:
-                    url = json.loads(text)["result"]["url"]
-                except (ValueError, KeyError, TypeError):
-                    continue
-                self._found = (path, shape)
-                self._attr_extra_state_attributes["file_url_endpoint"] = f"{path} [{shape}]"
-                return url, path, name
         self._attr_extra_state_attributes["attempts"] = attempts
         self._found = None
         raise RuntimeError(f"no file URL endpoint worked ({len(attempts)} attempts, see 'attempts')")
@@ -99,7 +107,7 @@ class MapCamera(Camera):
         self._attr_extra_state_attributes["map_obj_name"] = obj
         # p10.1 first; then the "<uid>/<did>/<slot>" names xiaomi-vac guesses.
         names = list(dict.fromkeys(c for c in (obj, f"{uid}/{did}/0", f"{uid}/{did}/1") if c))
-        url, _, name = await self._file_url(http, names)
+        url, name = await self._file_url(names)
         async with async_get_clientsession(self.hass).get(url) as r:
             r.raise_for_status()
             raw = await r.read()
