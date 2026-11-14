@@ -1,0 +1,15 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pick a Xiaomi Home vacuum",
+        "data": { "did": "Vacuum" }
+      }
+    },
+    "abort": {
+      "no_xiaomi_home": "Set up the Xiaomi Home integration first.",
+      "no_vacuums": "Xiaomi Home has no vacuum devices.",
+      "already_configured": "This vacuum already has a map."
+    }
+  }
+}

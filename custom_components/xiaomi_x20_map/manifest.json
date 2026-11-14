@@ -1,0 +1,11 @@
+{
+  "domain": "xiaomi_x20_map",
+  "name": "Xiaomi X20 Pro Map",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["xiaomi_home"],
+  "documentation": "https://github.com/adamkoro/xiaomi_x20_pro_map_ha",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
