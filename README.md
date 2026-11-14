@@ -112,6 +112,35 @@ requirements.
   Its `vacuum-map-parser-xiaomi` decrypt is broken for 20-char model names (see the
   xiaomi-vac notes).
 
+## Live test results
+
+### 2026-11-14, v0.1.0: `get_interim_file_url` is 404 on the HA OAuth host
+
+- Reading `p10.1 map-obj-name` through xiaomi_home works: it returns `<uid>/<did>/0`,
+  exactly the name xiaomi-vac guesses (so slot 0 is the current map).
+- `POST https://de.ha.api.io.mi.com/app/v2/home/get_interim_file_url` with xiaomi_home's
+  Bearer token returns **HTTP 404** for both `/0` and `/1`. A 404 is a "no such route"
+  answer, not an auth or body error: the HA OAuth gateway doesn't expose this API
+  (or not under this path).
+
+### v0.1.1: probing other routes
+
+The camera now sends the request itself (same host and headers as xiaomi_home) and
+tries each route below with two body shapes (`{"obj_name": …}` and the legacy
+`{"data": "{\"obj_name\": …}"}`), stopping at the first that returns a `url`.
+A route that gives 404 is skipped for the other bodies and names.
+
+| Route | Seen in |
+|---|---|
+| `/app/v2/home/get_interim_file_url` | xiaomi-vac, Cloud Map Extractor (v2 models) |
+| `/app/v2/home/get_interim_file_url_pro` | xiaomi-vac (ijai), dreame-vacuum |
+| `/app/home/getmapfileurl` | Cloud Map Extractor (Roborock) |
+| `/app/home/getfileurl`, `/app/home/getfileurl_v3` | dreame-vacuum |
+
+Every attempt (route, body, name, HTTP status, first 200 chars of the reply) is
+listed in the camera's `attempts` attribute; the working one is shown in
+`file_url_endpoint`. After a full failure it waits 10 minutes before probing again.
+
 ## Plan
 
 1. ✅ Scaffold: config flow picks a xiaomi_home vacuum; a camera polls every 60 s:
@@ -127,14 +156,13 @@ requirements.
 
 ## Open questions
 
-1. **Biggest unknown: will `ha.api.io.mi.com` accept `/app/v2/home/get_interim_file_url`
-   with xiaomi_home's OAuth token?** That host and the `haapi` biz id might only
-   allow the handful of paths xiaomi_home itself uses (device list, prop get/set,
-   action). Nobody has tried this yet.
-2. Body shape on the OAuth API: is it `{"obj_name": …}` (JSON, used now) or the legacy
-   `{"data": "{\"obj_name\":…}"}`?
-3. What does p10.1 hold on d102gl: a full FDS object name, a bare id, or empty until
-   `a10.7 update-properties-data` is called?
+1. ~~Will `ha.api.io.mi.com` accept `/app/v2/home/get_interim_file_url` with
+   xiaomi_home's OAuth token?~~ **No: HTTP 404** (2026-11-14). Does any other file-URL
+   route work there (v0.1.1 probes them)? If none does, the only known path is the
+   legacy Mi-account API, which means a second login.
+2. Body shape on the OAuth API: `{"obj_name": …}` or the legacy
+   `{"data": "{\"obj_name\":…}"}`? (Only matters once a route answers.)
+3. ~~What does p10.1 hold?~~ `<uid>/<did>/0`, the FDS object name (2026-11-14).
 4. Is the d102gl blob really the version-2 JSON format? (xiaomi-vac assumes so from the
    spec family; it is confirmed only on d109gl and ov42gl.)
 5. Is the format of p10.4 `vacuum-position` the same as in d109gl?
