@@ -1,5 +1,9 @@
 # Xiaomi X20 Pro Map (Home Assistant)
 
+> [!WARNING]
+> This repo is **under development** and not ready for use. The code and docs were
+> written by [Claude](https://claude.com/claude-code) (Anthropic's AI assistant).
+
 A HACS custom integration that adds a **live map camera** for the Xiaomi Robot Vacuum
 X20 Pro (`xiaomi.vacuum.d102gl`). It runs **on top of** the official Xiaomi Home
 integration (`xiaomi_home`). It never logs in itself: it borrows `xiaomi_home`'s
