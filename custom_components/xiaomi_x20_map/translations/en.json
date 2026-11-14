@@ -3,7 +3,9 @@
     "step": {
       "user": {
         "title": "Pick a Xiaomi Home vacuum",
-        "data": { "did": "Vacuum" }
+        "data": {
+          "did": "Vacuum"
+        }
       }
     },
     "abort": {
@@ -16,12 +18,29 @@
     "step": {
       "init": {
         "title": "Mi account for the map",
-        "description": "Xiaomi Home's own login can't download the map, so this integration signs in to your Mi account (the legacy API) only to get the map file link. Everything else still goes through Xiaomi Home. The password is stored in this config entry.\n\n{info}",
-        "data": { "username": "Mi account (email, phone or ID)", "password": "Password" }
+        "description": "Xiaomi Home's own login can't download the map, so this integration signs in to your Mi account (the legacy API) only to get the map file link. Everything else still goes through Xiaomi Home. The password and the session are stored in this config entry.\n\n{info}",
+        "data": {
+          "username": "Mi account (email, phone or ID)",
+          "password": "Password"
+        }
+      },
+      "captcha": {
+        "title": "Captcha",
+        "description": "Xiaomi wants a captcha for this sign-in. Type the characters you see:\n\n{image}",
+        "data": {
+          "code": "Captcha code"
+        }
+      },
+      "twofa": {
+        "title": "Verification code",
+        "description": "Xiaomi sent a verification code by {channel}. Enter it here.",
+        "data": {
+          "code": "Verification code"
+        }
       }
     },
     "error": {
-      "verify": "Xiaomi wants you to verify this sign-in. Open the link above in a browser on the same network as Home Assistant, finish the check, then submit again.",
+      "wrong_code": "That code was wrong. Try again.",
       "invalid_auth": "Xiaomi refused the login, see the message above.",
       "cannot_connect": "Couldn't reach Xiaomi. Check Home Assistant's internet connection and try again."
     }

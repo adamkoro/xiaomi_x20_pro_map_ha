@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from . import DOMAIN
 from .map import decrypt, render
-from .micloud import CloudUnreachable, LoginError, MiCloud, VerificationRequired
+from .micloud import MiCloud
 
 _LOGGER = logging.getLogger(__name__)
 REFRESH_S = 60  # ponytail: fixed poll; faster while cleaning once the fetch is proven
@@ -39,9 +39,11 @@ class MapCamera(Camera):
         self._img: bytes | None = None
         self._last = 0.0
         self._found: str | None = None  # URL path that worked
-        opts = entry.options
-        self._mi = MiCloud(opts["username"], opts["password"]) if opts.get("password") else None
-        self._blocked: str | None = None  # login needs a human: stop retrying until reload
+        self._mi: MiCloud | None = None
+        if sess := entry.options.get("session"):  # saved by the options flow's login
+            self._mi = MiCloud()
+            self._mi.restore(sess)
+        self._blocked: str | None = None  # needs a new login via Configure: stop retrying
         self._attr_extra_state_attributes = {}
 
     def _client(self):
@@ -57,23 +59,19 @@ class MapCamera(Camera):
     async def _login(self) -> None:
         if self._mi is None:
             raise RuntimeError("No Mi account set: Settings > Devices & services > "
-                               "Xiaomi X20 Pro Map > Configure, enter it there")
+                               "Xiaomi X20 Pro Map > Configure, log in there")
         if self._blocked:
             raise RuntimeError(self._blocked)
         if self._mi.logged_in:
             return
-        try:
-            await self.hass.async_add_executor_job(self._mi.login)
-        except CloudUnreachable:
-            raise  # network: retry after the backoff
-        except VerificationRequired as ex:
-            self._attr_extra_state_attributes["verification_url"] = ex.url
-            self._blocked = f"{ex} Then reload the Xiaomi X20 Pro Map integration."
-            raise RuntimeError(self._blocked) from None
-        except LoginError as ex:  # wrong password etc.: retrying only risks an account lock
-            self._blocked = f"{ex}. Fix it under Configure, which reloads the integration."
-            raise RuntimeError(self._blocked) from None
-        self._attr_extra_state_attributes.pop("verification_url", None)
+        # Expired session: renew with the passToken. A password login could need a captcha
+        # or 2FA, which only the options flow can show, so never try one here.
+        # ponytail: the renewed session lives in memory only; after a restart the saved
+        # passToken renews it again.
+        if not await self.hass.async_add_executor_job(self._mi.refresh):
+            self._blocked = ("Mi session expired and could not be renewed: open Configure on "
+                             "Xiaomi X20 Pro Map and log in again")
+            raise RuntimeError(self._blocked)
 
     async def _file_url(self, names) -> tuple[str, str]:
         """First (url, name) that works; every attempt is kept in the 'attempts' attribute."""

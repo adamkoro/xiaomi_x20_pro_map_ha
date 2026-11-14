@@ -1,11 +1,13 @@
 """Pick one vacuum from an already set-up xiaomi_home entry. No login of our own."""
+import base64
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
 from . import DOMAIN
-from .micloud import CloudUnreachable, LoginError, MiCloud, VerificationRequired
+from .micloud import CloudUnreachable, LoginError, MiCloud, image_type
 
 
 def _vacuums(hass) -> dict[str, tuple[str, dict]]:
@@ -52,31 +54,57 @@ class XiaomiX20MapFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class MiAccountOptions(config_entries.OptionsFlow):
-    """Legacy Mi-account login, used only to get the map file URL. Checked by logging in."""
+    """Legacy Mi-account login, used only to get the map file URL.
 
-    async def async_step_init(self, user_input=None):
-        errors, info = {}, ""
-        if user_input is not None:
-            mi = MiCloud(user_input["username"], user_input["password"])
-            try:
-                await self.hass.async_add_executor_job(mi.login)
-            except VerificationRequired as ex:
-                errors["base"] = "verify"
-                info = f"**{ex}**\n\n{ex.url or ''}"
-            except CloudUnreachable:
-                errors["base"] = "cannot_connect"
-            except LoginError as ex:
-                errors["base"] = "invalid_auth"
-                info = f"**{ex}**"
-            else:
-                return self.async_create_entry(data=user_input)
+    init (user + password) -> [captcha] -> [2fa] -> saves the session. One MiCloud object
+    lives across the steps: Xiaomi binds the captcha and the 2FA ticket to its cookies.
+    """
 
-        old = user_input or self.config_entry.options
-        return self.async_show_form(
-            step_id="init", errors=errors, description_placeholders={"info": info},
-            data_schema=vol.Schema({
-                vol.Required("username", default=old.get("username", "")): str,
+    def __init__(self):
+        self._mi: MiCloud | None = None
+        self._creds: dict = {}
+
+    async def _run(self, step_id: str, fn, *args):
+        """Run one login step in the executor and show whatever Xiaomi wants next."""
+        try:
+            state = await self.hass.async_add_executor_job(fn, *args)
+        except CloudUnreachable:
+            return self._form(step_id, {"base": "cannot_connect"})
+        except LoginError as ex:  # refused: back to the credentials form with Xiaomi's reason
+            return self._form("init", {"base": "invalid_auth"}, info=f"**{ex}**")
+        if state == "ok":
+            return self.async_create_entry(data={**self._creds, "session": self._mi.session()})
+        nxt = "captcha" if state == "captcha" else "twofa"
+        # Same step again after a code was typed = that code was wrong (captcha: new image).
+        return self._form(nxt, {"base": "wrong_code"} if nxt == step_id else {})
+
+    def _form(self, step_id: str, errors: dict, info: str = ""):
+        if step_id == "captcha":
+            img = self._mi.captcha_image or b""
+            uri = f"data:{image_type(img)};base64,{base64.b64encode(img).decode()}"
+            ph, schema = {"image": f"![captcha]({uri})"}, {vol.Required("code"): str}
+        elif step_id == "twofa":
+            ph, schema = {"channel": self._mi.twofa_channel}, {vol.Required("code"): str}
+        else:
+            ph = {"info": info}
+            schema = {
+                vol.Required("username", default=self._creds.get(
+                    "username", self.config_entry.options.get("username", ""))): str,
                 vol.Required("password"): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-            }),
-        )
+            }
+        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(schema),
+                                    errors=errors, description_placeholders=ph)
+
+    async def async_step_init(self, user_input=None):
+        if user_input is None:
+            return self._form("init", {})
+        self._creds = {"username": user_input["username"], "password": user_input["password"]}
+        self._mi = MiCloud(**self._creds)
+        return await self._run("init", self._mi.begin_login)
+
+    async def async_step_captcha(self, user_input=None):
+        return await self._run("captcha", self._mi.submit_captcha, user_input["code"])
+
+    async def async_step_twofa(self, user_input=None):
+        return await self._run("twofa", self._mi.submit_2fa, user_input["code"])

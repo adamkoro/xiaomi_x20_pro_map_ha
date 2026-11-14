@@ -25,15 +25,22 @@ Status: **in testing, no map rendered on the real robot yet.** See [Open questio
 
 ### Mi-account login
 
-- Stored in this integration's config entry (`.storage/core.config_entries`), like
-  any HA integration's credentials. Never logged, never put in attributes.
-- If Xiaomi wants **2FA or a captcha**, the form shows Xiaomi's verification link.
-  Open it in a browser on the **same network / public IP as HA**, finish the check,
-  then press Submit again. If the camera hits this later (session expired), it stops
-  trying, shows `error` and `verification_url` on the camera; do the check, then
-  reload the integration.
-- A wrong password also stops retries (to avoid an account lock) until you fix it
-  under Configure.
+- Everything happens inside the Configure dialog, no browser detours:
+  1. Mi account + password.
+  2. **Captcha** (if Xiaomi asks): the image is shown right in the dialog; type the
+     characters. A wrong code shows a fresh image.
+  3. **Verification code** (if Xiaomi asks for 2FA): Xiaomi e-mails the code (SMS if
+     the account has no e-mail; that path is unverified), you type it in.
+- The captcha and the 2FA ticket are bound to the login's own cookies (`ick`), so a
+  captcha opened in a browser, or a browser sign-in, does **not** clear them. That's
+  why the dialog fetches the image itself and keeps one session across the steps.
+- Saved in this integration's config entry (`.storage/core.config_entries`): the
+  account, the password and the resulting session (`ssecurity`, `serviceToken`,
+  `passToken`). Never logged, never put in attributes or error texts.
+- The camera only uses the saved session. When it expires it renews it with the
+  `passToken` (no password, no captcha). If that fails, it stops and its `error` says
+  to log in again under Configure. It never tries a password login on its own, so it
+  can't hit a captcha nobody sees or lock the account.
 
 ### Self-checks (no HA needed)
 
@@ -177,9 +184,26 @@ Mi-account login only for this call.
   `/v2/home/get_interim_file_url_pro`, `/home/getmapfileurl`.
 - Camera attributes: `attempts` (route, name, HTTP status, Xiaomi's code/message;
   never a returned URL), `file_url_endpoint` (region + route that worked),
-  `error`, `verification_url`, `map_obj_name`, `obj_name_used`.
-- The session lives in memory; HA restart = one fresh login. 401 → log in again on
-  the next cycle.
+  `error`, `map_obj_name`, `obj_name_used`.
+
+### 2026-11-14, v0.2.0: captcha can't be solved in a browser
+
+Xiaomi answered the login with a captcha (`code 87001`, a `/pass/getCode` URL). Opening
+that URL in a browser only downloads the image (a JPEG with no extension), and a
+browser sign-in doesn't help either: the captcha belongs to HA's own login session.
+
+### v0.2.1: captcha and 2FA inside the options flow
+
+- `micloud.py` is a state machine (`begin_login` / `submit_captcha` / `submit_2fa` →
+  `ok` | `captcha` | `2fa`). The options flow keeps one `MiCloud` (one
+  `requests.Session`) across its steps.
+- Captcha: fetched with that session, shown as a `data:` URI image in the step
+  description, `captCode` sent back to `serviceLoginAuth2`. 87001 again = wrong code,
+  new image.
+- 2FA: `identity/auth/sendEmailTicket` (then `sendPhoneTicket`), code step,
+  `verifyEmail`/`verifyPhone`, then the finish redirects to the STS link
+  (ported from xiaomi-vac).
+- The session is saved in the entry; the camera renews it with the `passToken`.
 
 ## Plan
 
@@ -190,8 +214,8 @@ Mi-account login only for this call.
 2. Install on HA, look at the camera's attributes / log, and answer the open questions.
 3. ✅ OAuth path refused (404 on every route) → optional legacy Mi-account login
    only for the file URL (v0.2.0).
-4. If a fresh login at every HA restart triggers 2FA too often: keep the session
-   (`passToken`) in the entry and refresh with it instead of the password.
+4. ✅ Session saved in the entry, renewed with the `passToken` (v0.2.1). The renewed
+   token isn't written back yet (memory only); write it back if renewals start failing.
 5. Once the map renders: robot position (p10.4), dock (`pile_x/y`), path (p10.2 object),
    room names (p2.16), faster polling while cleaning.
 

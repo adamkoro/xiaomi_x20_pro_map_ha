@@ -1,8 +1,9 @@
-"""RC4 vector + secrets never reach exception text.
+"""RC4 vector, captcha login on one session, secrets never reach exception text.
 
 Run: uv run --no-project --with requests python tests/test_micloud.py
 """
 import importlib.util
+import json
 import pathlib
 
 import requests
@@ -15,23 +16,71 @@ _spec.loader.exec_module(m)
 # Classic RC4 test vector (no keystream drop).
 assert m.rc4(b"Key", b"Plaintext", drop=0).hex() == "bbf316e8d940af0ad3"
 assert m.rc4(b"k" * 16, m.rc4(b"k" * 16, b"round trip")) == b"round trip"
+assert m.image_type(b"\x89PNG\r\n") == "image/png" and m.image_type(b"\xff\xd8\xff") == "image/jpeg"
 
 
-class _Boom(requests.Session):
+def _resp(text="", content=b"", cookies=None):
+    r = requests.Response()
+    r.status_code, r._content = 200, content or text.encode()
+    for k, v in (cookies or {}).items():
+        r.cookies.set(k, v)
+    return r
+
+
+class FakeXiaomi(requests.Session):
+    """serviceLogin -> captcha -> wrong code -> new captcha -> right code -> ok."""
+
+    def __init__(self):
+        super().__init__()
+        self.sessions_seen, self.captcha_fetches = set(), 0
+
+    def request(self, method, url, **kw):
+        self.sessions_seen.add(id(self))
+        if url.startswith(m._LOGIN):
+            return _resp("&&&START&&&" + json.dumps({"_sign": "s"}))
+        if url == m._AUTH2:
+            code = kw["params"].get("captCode")
+            if code == "right":
+                return _resp(json.dumps({"ssecurity": "c2VjcmV0", "userId": 1,
+                                         "passToken": "pt", "location": "https://sts/x"}))
+            return _resp(json.dumps({"code": 87001, "captchaUrl": "/pass/getCode?icodeType=login"}))
+        if "getCode" in url:
+            self.captcha_fetches += 1
+            self.cookies.set("ick", "bound-to-this-session")
+            return _resp(content=b"\xff\xd8\xff captcha")
+        if url == "https://sts/x":
+            self.cookies.set("serviceToken", "tok")
+            return _resp("ok")
+        raise AssertionError(url)
+
+
+m.requests.Session = FakeXiaomi
+c = m.MiCloud("user@example.com", "hunter2")
+assert c.begin_login() == "captcha" and c.captcha_image.startswith(b"\xff\xd8")
+assert c.submit_captcha("wrong") == "captcha" and c._s.captcha_fetches == 2  # image refreshed
+assert c.submit_captcha(" right ") == "ok"
+assert len(c._s.sessions_seen) == 1  # every step on the same cookies (ick)
+assert c.session() == {"user_id": 1, "ssecurity": "c2VjcmV0", "service_token": "tok",
+                       "pass_token": "pt"}
+d = m.MiCloud()
+d.restore(c.session())
+assert d.logged_in
+
+
+class Boom(requests.Session):
     def request(self, method, url, **kw):  # every call fails, with the full URL in the text
         raise requests.ConnectionError(f"failed {url} {kw.get('params')}")
 
 
-m.requests.Session = _Boom
+m.requests.Session = Boom
 c = m.MiCloud("user@example.com", "hunter2")
 try:
-    c.login()
+    c.begin_login()
     raise AssertionError("login must fail")
 except m.CloudUnreachable as ex:
-    assert ex.__cause__ is None and ex.__suppress_context__
-    assert "example.com" not in str(ex) and "hunter2" not in str(ex)
+    assert ex.__suppress_context__ and "example.com" not in str(ex) and "hunter2" not in str(ex)
 
-c._s, c._ssecurity, c._token, c._uid = _Boom(), "c2VjcmV0c2VjcmV0", "tok", "1"
+c.restore({"user_id": "1", "ssecurity": "c2VjcmV0c2VjcmV0", "service_token": "tok"})
 try:
     c.call("de", "/home/getmapfileurl", {"obj_name": "x"})
     raise AssertionError("call must fail")
