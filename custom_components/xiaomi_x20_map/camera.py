@@ -10,11 +10,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
 
-from .map import MapImage, decrypt, parse_position
+from .map import MapImage, decrypt, describe, parse_position
 from .micloud import MiCloud
 
 _LOGGER = logging.getLogger(__name__)
-MAP_SIID, MAP_OBJ_PIID, POS_PIID = 10, 1, 4  # d102gl: vacuum-map / map-obj-name / vacuum-position
+MAP_SIID, MAP_OBJ_PIID, POS_PIID, MAP3D_PIID = 10, 1, 4, 9  # d102gl: vacuum-map / map-obj-name /
+# vacuum-position / map-3d-info
 TICK = timedelta(seconds=2)
 MAP_REFRESH_S = 600         # docked/idle: re-download the map file this often
 MAP_REFRESH_ACTIVE_S = 120  # cleaning: the map and the path grow
@@ -38,7 +39,8 @@ class MapCamera(Camera):
     _attr_name = "Map"
     _attr_frame_interval = 2  # MJPEG ("live" view): resend the cached frame every 2 s
     # Change every few seconds while cleaning: keep them out of the recorder.
-    _unrecorded_attributes = frozenset({"robot_position_raw", "robot_position", "attempts"})
+    _unrecorded_attributes = frozenset({"robot_position_raw", "robot_position", "attempts",
+                                        "map_keys", "map_3d_info"})
     content_type = "image/png"
 
     def __init__(self, hass, entry):
@@ -180,7 +182,16 @@ class MapCamera(Camera):
             raw = await r.read()
         data = decrypt(raw, self._d["model"], did)
         self._map = await self.hass.async_add_executor_job(MapImage, data)
-        self._attr_extra_state_attributes["obj_name_used"] = name
+        attrs = self._attr_extra_state_attributes
+        attrs["obj_name_used"] = name
+        # Diagnostics while the furniture format is unknown (README open question 6).
+        attrs["map_keys"] = describe(data)
+        try:
+            res = await self._client().miot_http.get_props_async(
+                [{"did": did, "siid": MAP_SIID, "piid": MAP3D_PIID}])
+            attrs["map_3d_info"] = (res or [{}])[0].get("value")
+        except Exception as ex:  # noqa: BLE001 - diagnostics only
+            attrs["map_3d_info"] = f"error: {ex}"
 
     async def _redraw(self) -> None:
         if self._map:

@@ -272,3 +272,7 @@ JSON format, so open question 4 is answered.
 5. What is the format of p10.4 `vacuum-position` on d102gl (keys, units, angle), and
    does xiaomi_home push it, or only answer polls? (`robot_position_raw` will tell.)
 6. Does the robot upload fresh maps while idle, or only while cleaning/mapping?
+7. Where does the furniture the app shows (bed, sofa, …) live? No reference parser reads
+   it: xiaomi-vac only knows rooms (`map_room_info`) and carpets (`carpets[].p`, 4 corner
+   points, from the separate p10.7 object). v0.3.1 exposes `map_keys` (shape of every
+   map-JSON key) and `map_3d_info` (raw p10.9) on the camera to find out.

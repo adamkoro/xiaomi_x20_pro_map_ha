@@ -184,3 +184,16 @@ class MapImage:
         out = io.BytesIO()
         img.save(out, "PNG", compress_level=1)  # speed over size: redrawn every few seconds
         return out.getvalue()
+
+
+def describe(data: dict) -> dict:
+    """Shape of every map-JSON key except the grid: finds where furniture etc. live."""
+    def short(v):
+        if isinstance(v, list):
+            first = v[0] if v else None
+            return f"list[{len(v)}]" + (f" {sorted(first)[:15]}" if isinstance(first, dict)
+                                        else f" e.g. {short(first)}" if v else "")
+        if isinstance(v, dict):
+            return f"dict {sorted(v)[:15]}"
+        return v if not isinstance(v, str) or len(v) <= 40 else f"str[{len(v)}]"
+    return {k: short(v) for k, v in data.items() if k != "map_data"}

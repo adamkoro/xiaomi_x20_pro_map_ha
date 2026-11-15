@@ -66,4 +66,8 @@ try:
     raise AssertionError("wrong did must not decrypt")
 except (ValueError, zlib.error):
     pass
+D = m.describe({"map_data": "x" * 99, "width": 4, "furniture": [{"x": 1, "type": 3}], "s": "y" * 50,
+                "o": {"b": 1, "a": 2}, "e": []})
+assert D == {"width": 4, "furniture": "list[1] ['type', 'x']", "s": "str[50]",
+             "o": "dict ['a', 'b']", "e": "list[0]"}, D
 print("ok")
