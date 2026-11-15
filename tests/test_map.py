@@ -50,7 +50,7 @@ assert im.getpixel((8, 18))[:3] == m.DOCK_COLOR  # pile (0, -400) mm -> near the
 assert im.getpixel((10, 5))[:3] == (0xcc,) * 3
 im = Image.open(io.BytesIO(mi.png(robot=(0, 250, 90))))
 assert im.getpixel((8, 5))[:3] == m.ROBOT_COLOR  # (0, 250) mm -> 5 rows from the top
-assert im.getpixel((10, 1))[:3] == (255, 255, 255)  # heading 90 deg = north = up
+assert im.getpixel((10, 1))[:3] == m.ROBOT_EDGE  # heading 90 deg = north = up
 
 # p10.4 parsing: the formats seen in the references; unknown -> None, never raises.
 P = m.parse_position
