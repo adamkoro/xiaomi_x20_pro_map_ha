@@ -45,12 +45,14 @@ mi = m.MapImage(big, scale=1)
 assert mi.to_px(-500, -500) == (0, 20)  # origin = bottom-left after the flip
 assert mi.to_px(0, 0) == (10, 10)
 assert mi.dock == (0.0, -400.0, 0.0)
+pm = m.MapImage({**big, "paths": {"points": [{"x": -400, "y": 300}, {"x": 400, "y": 300}]}}, scale=1)
+assert Image.open(io.BytesIO(pm.png())).getpixel((10, 4)) == (255, 255, 255, 255)  # path: solid white
 im = Image.open(io.BytesIO(mi.png()))
 assert im.getpixel((8, 18))[:3] == m.DOCK_COLOR  # pile (0, -400) mm -> near the bottom (centre = heading tick)
 assert im.getpixel((10, 5))[:3] == (0xcc,) * 3
 im = Image.open(io.BytesIO(mi.png(robot=(0, 250, 90))))
 assert im.getpixel((8, 5))[:3] == m.ROBOT_COLOR  # (0, 250) mm -> 5 rows from the top
-assert im.getpixel((10, 1))[:3] == m.ROBOT_EDGE  # heading 90 deg = north = up
+assert im.getpixel((10, 1))[:3] == (255, 255, 255)  # heading 90 deg = north = up
 
 # p10.4 parsing: the formats seen in the references; unknown -> None, never raises.
 P = m.parse_position

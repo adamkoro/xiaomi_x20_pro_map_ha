@@ -62,9 +62,8 @@ for _v in range(256):
 
 
 DOCK_COLOR = (0x2e, 0xa0, 0x43)
-ROBOT_COLOR = (0xff, 0xff, 0xff)
-ROBOT_EDGE = (0x22, 0x22, 0x22)  # outline + heading: a white body needs a dark edge
-PATH_COLOR = (0xff, 0xff, 0xff, 0xb0)
+ROBOT_COLOR = (0x1e, 0x6f, 0xd9)
+PATH_COLOR = (0xff, 0xff, 0xff, 0xff)  # opaque: alpha shows the card background (grey)
 ROBOT_RADIUS_MM = 175  # X20 Pro is ~35 cm across
 
 
@@ -164,24 +163,24 @@ class MapImage:
         row = self._h - (y_mm - self._oy) / self._res  # flipped: north up
         return (col - self._left) * self._scale, (row - self._top) * self._scale
 
-    def _marker(self, draw, pose, color, square=False, edge="white") -> None:
+    def _marker(self, draw, pose, color, square=False) -> None:
         x, y = self.to_px(pose[0], pose[1])
         r = max(3.0, ROBOT_RADIUS_MM / self._res * self._scale)
         box = (x - r, y - r, x + r, y + r)
         if square:
-            draw.rectangle(box, fill=color, outline=edge, width=2)
+            draw.rectangle(box, fill=color, outline="white", width=2)
         else:
-            draw.ellipse(box, fill=color, outline=edge, width=2)
+            draw.ellipse(box, fill=color, outline="white", width=2)
         if pose[2] is not None:  # heading tick; image y grows downward
             a = math.radians(pose[2])
             draw.line([(x, y), (x + math.cos(a) * r * 1.6, y - math.sin(a) * r * 1.6)],
-                      fill=edge, width=max(2, int(r / 3)))
+                      fill="white", width=max(2, int(r / 3)))
 
     def png(self, robot: tuple[float, float, float | None] | None = None) -> bytes:
         img = self.base
         if robot := robot or self.map_robot:
             img = img.copy()
-            self._marker(ImageDraw.Draw(img), robot, ROBOT_COLOR, edge=ROBOT_EDGE)
+            self._marker(ImageDraw.Draw(img), robot, ROBOT_COLOR)
         out = io.BytesIO()
         img.save(out, "PNG", compress_level=1)  # speed over size: redrawn every few seconds
         return out.getvalue()
