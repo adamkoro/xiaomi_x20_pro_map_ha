@@ -205,6 +205,43 @@ browser sign-in doesn't help either: the captcha belongs to HA's own login sessi
   (ported from xiaomi-vac).
 - The session is saved in the entry; the camera renews it with the `passToken`.
 
+### 2026-11-15, v0.2.1: the map renders
+
+The captcha step worked, and the map now renders on HA. Working route:
+`file_url_endpoint = "de /v2/home/get_interim_file_url_pro"` (not the plain
+`get_interim_file_url` xiaomi-vac assumed for this family). The blob is the version-2
+JSON format, so open question 4 is answered.
+
+### v0.3.0: dock, live robot, cleaning path
+
+- **Dock**: `have_pile` + `pile_x/pile_y` (mm) from the map JSON, heading tick from
+  `pile_yaw`; same transform as the rooms:
+  `col = (x − origin_x) / resolution`, `row = height − (y − origin_y) / resolution`
+  (north up), minus the crop, times the scale.
+- **Cleaning path**: `paths.points[]` (`{x, y}` mm) from the same map JSON, drawn
+  into the base image. That's the path as of the last map upload; the separate
+  `p10.2 trajectory-obj-name` object is not used yet.
+- **Robot**: `p10.4 vacuum-position`, read with xiaomi_home's cloud client (one
+  `prop/get` for p10.1 + p10.4) and also through xiaomi_home's property push
+  (`MIoTDevice.sub_property`, which keeps xiaomi_home's own handler). The d102gl format is
+  unknown, so `parse_position` accepts JSON/dict `{x, y, yaw|phi|angle|…}` (also nested
+  under `position`/`pos`), Dreame-style `{robotPos: [x, y], robotPhi}`, a list
+  `[x, y(, a)]` or `"x,y(,a)"` text, in map millimetres. Angles: radians, centi-degrees
+  or degrees (the vacuum_map_parser_xiaomi heuristic, but kept to 0–360 so the heading
+  keeps its direction). If p10.4 can't be read, the robot pose saved in the map file
+  (`position`) is drawn instead.
+- **Live** (background tick every 2 s, cheap when nothing is due):
+  - p10.1 + p10.4 every **4 s** while xiaomi_home's vacuum entity is `cleaning` or
+    `returning`, every **5 min** otherwise.
+  - Map file: re-downloaded when p10.1 changes, right after a clean finishes, every
+    **2 min** while cleaning (so the path grows) and every **10 min** otherwise.
+  - Each position change only stamps the robot onto the cached base image (PNG at
+    `compress_level=1`). `async_camera_image` just returns the last frame, and
+    `frame_interval = 2 s` for the MJPEG "live" camera view.
+- New attributes: `robot_position_raw` (the p10.4 value as received),
+  `robot_position` (`{x, y, yaw}` or `"unparsed"`), `live`, `position_error`.
+  `robot_position*` and `attempts` are kept out of the recorder.
+
 ## Plan
 
 1. ✅ Scaffold: config flow picks a xiaomi_home vacuum; a camera polls every 60 s:
@@ -216,8 +253,10 @@ browser sign-in doesn't help either: the captcha belongs to HA's own login sessi
    only for the file URL (v0.2.0).
 4. ✅ Session saved in the entry, renewed with the `passToken` (v0.2.1). The renewed
    token isn't written back yet (memory only); write it back if renewals start failing.
-5. Once the map renders: robot position (p10.4), dock (`pile_x/y`), path (p10.2 object),
-   room names (p2.16), faster polling while cleaning.
+5. ✅ Dock, live robot (p10.4), path from the map JSON, faster polling while cleaning
+   (v0.3.0). Confirm the p10.4 format and units on the real robot.
+6. Next: room names (p2.16), the live trajectory object (p10.2) if the map-file path
+   lags too much.
 
 ## Open questions
 
@@ -229,7 +268,7 @@ browser sign-in doesn't help either: the captcha belongs to HA's own login sessi
 2. Which legacy route answers for d102gl: `get_interim_file_url`, `_pro` or
    `getmapfileurl`? (v0.2.0 tries all three; `file_url_endpoint` will tell.)
 3. ~~What does p10.1 hold?~~ `<uid>/<did>/0`, the FDS object name (2026-11-14).
-4. Is the d102gl blob really the version-2 JSON format? (xiaomi-vac assumes so from the
-   spec family; it is confirmed only on d109gl and ov42gl.)
-5. Is the format of p10.4 `vacuum-position` the same as in d109gl?
+4. ~~Is the d102gl blob really the version-2 JSON format?~~ Yes (2026-11-15).
+5. What is the format of p10.4 `vacuum-position` on d102gl (keys, units, angle), and
+   does xiaomi_home push it, or only answer polls? (`robot_position_raw` will tell.)
 6. Does the robot upload fresh maps while idle, or only while cleaning/mapping?
